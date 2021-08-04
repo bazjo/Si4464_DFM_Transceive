@@ -15,7 +15,7 @@ void gpio_init(void){
   gpio_spi1_init();
   gpio_radio_init();
   gpio_led_init();
-  gpio_int_init();
+  //gpio_int_init();
 }
 
 /**

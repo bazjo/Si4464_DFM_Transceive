@@ -10,9 +10,13 @@
 #include "gpio.h"
 #include "timer.h"
 #include "protocol.h"
+#include  <stdio.h>
 
-void command_handler(uint16_t rx_data);
-void fill_data(void);
+int send_frames(uint8_t* framebuffer, int framecount);
+int set_modtype(int modtype);
+int adjust_xtal(int8_t adj);
+int set_freq(double freq, int16_t adj);
+int set_power(uint8_t power);
 
 /**
  * After the startup code finishes it will call this function, here is the entry point for user code exeution.
@@ -24,114 +28,90 @@ void main(void)
   gpio_init();
   spi1_init();
   timer_init();
-  protocol_init();
 
-  fill_data();
-  comm_hal_frequency_set(0x5e);
-  comm_hal_datarate_set(4800U);
+  si446x_reset();
+  
+  uint8_t comm_hal_cfg[] = RADIO_CONFIGURATION_DATA_ARRAY;
+  si446x_configuration_init(comm_hal_cfg);
 
-  comm_hal_hdrmode(0x00);
+  set_modtype(0);
+  adjust_xtal(0x02);
 
-  while(1){
-    if(comm_int_handler_pending){
-      comm_int_handler();
-      comm_int_handler_pending = 0x00;
-    }
-    #ifdef COMM_RX_ENABLED
-      if(comm_rx_pending){
-        command_handler(protocol_command_get());
-        comm_rx_pending = 0x00;
-      }
-    #endif
-    if(send_flag){
-      protocol_frame_send();
-      send_flag = 0;
-    }
+  set_power(0x10);
+
+  set_freq(403.0, 0x00);
+
+  uint8_t buffer[35] = {0x45, 0xcf, 0x6c, 0xb8, 0xa5, 0x2d, 0x1c, 0x25, 0x0c, 0x4d, 0x03, 0xc0, 0x1d, 0xc3, 0x12, 0x08, 0x60, 0xd9, 0x86, 0xf0, 0x08, 0x41, 0x24, 0x72, 0x6a, 0x85, 0xa2, 0x25, 0x34, 0x94, 0x10, 0x31, 0xee, 0xef, 0xf5};
+  send_frames(buffer, 1);
+
+}
+
+int send_frames(uint8_t* framebuffer, int framecount) {
+  
+  si446x_write_tx_fifo(35, framebuffer);
+  
+  if(framecount == 200) {
+    si446x_start_tx(0x00, 0x00, 0x1B85);
+  } else if(framecount == 1000) {
+    si446x_start_tx(0x00, 0x00, 0x00);
+  } else if(framecount == 1) {
+    si446x_start_tx(0x00, 0x00, 0x35);
+    return -1;
+  }
+
+  uint8_t tx_fifo_space;
+  for(int i = 0; i < framecount; i++){
+    do{
+      si446x_fifo_info(0b00);
+      tx_fifo_space = Si446xCmd.FIFO_INFO.TX_FIFO_SPACE;
+    } while(tx_fifo_space < 35);
+
+    si446x_write_tx_fifo(35, framebuffer);
+  }
+
+  return 0;
+}
+
+int set_modtype(int modtype){
+  switch(modtype){
+    case 0://Set Modulation type to 2GFSK, Set Modulation Source to Packet Handler
+      si446x_set_property(0x20, 0x01, 0x00, 0b00000011); 
+      return 0;
+    case 1://Set Modulation type to CW, Set Modulation Source to PN9
+      si446x_set_property(0x20, 0x01, 0x00, 0b00010000); 
+      return 0;
+    case 2://Set Modulation type to 2GFSK, Set Modulation Source to PN9
+      si446x_set_property(0x20, 0x01, 0x00, 0b00010011);  
+      return 0;
+    case 3://Set Modulation type to 2FSK, Set Modulation Source to Packet Handler
+      si446x_set_property(0x20, 0x01, 0x00, 0b00000010);
+      return 0;
+    default:
+      return -1;
   }
 }
 
-void EXTI0_IRQHandler(void){
-  comm_int_handler_pending = 0xff;
-  EXTI->PR |= EXTI_PR_PR0;
+int adjust_xtal(int8_t adj){
+  //Positive Adjustment decreases frequency
+  si446x_set_property(0x00, 0x01, 0x00, 0x40 + adj);
 }
 
-#ifdef COMM_RX_ENABLED
-  enum command_table{nop = 0x00, led_toggle = 0x03, error = 0xff};
-  void command_handler(uint16_t rx_data){
-    uint8_t value = rx_data; //drop high byte
-    switch((rx_data >> 8)){
-      case nop:{
-        asm("nop"); //Erst mal 'ne Runde nichts machen! (For testing purpose)
-      }
-      case led_toggle:{
-        if(GPIO_LED->ODR & GPIO_ODR_ODR13_Msk){
-          GPIO_LED->BSRR |= GPIO_BSRR_BR_LEDRED_Msk;
-        }
-        else{
-          GPIO_LED->BSRR |= GPIO_BSRR_BS_LEDRED_Msk;
-        }
-        break;
-      }
-      case error:{
-        asm("nop");//error
-      }
-      default:{
-        break;
-      }
-    }
-  }
-#endif
+int set_freq(double freq, int16_t adj){
+  if (freq < 400.0 || freq > 406.00) return -1;
+  uint8_t Reg_Int = (freq < 403.0) ? 61 : 62;
 
-void fill_data(void){
-  uint8_t status_data[40] = {
-    0x03, 0x1e, 0x50, 0x32, 0x37, 0x34, 0x30, 0x33,
-    0x38, 0x37, 0x1a, 0x00, 0x00, 0x03, 0x00, 0x00,
-    0x15, 0x00, 0x00, 0x5d, 0x00, 0x07, 0x32, 0x20,
-    0xc9, 0x66, 0xb5, 0x41, 0x00, 0x00, 0x40, 0x40,
-    0xff, 0xff, 0xff, 0xc6, 0xff, 0xff, 0xff, 0xc6
-  };
-  protocol_field_write(&protocol_f_status, status_data);
-  uint8_t meas_data[42] = {
-    0xcf, 0x52, 0x02, 0x2a, 0x00, 0x02, 0x9c, 0xe7,
-    0x02, 0x27, 0x8d, 0x08, 0xaf, 0x87, 0x07, 0x47,
-    0x91, 0x08, 0xcb, 0x2b, 0x02, 0x2b, 0x00, 0x02,
-    0x9d, 0xe7, 0x02, 0x09, 0x67, 0x05, 0xee, 0xa6,
-    0x04, 0xfe, 0xae, 0x06, 0x00, 0x00, 0xfb, 0xfb,
-    0x00, 0x00
-  };
-  protocol_field_write(&protocol_f_meas, meas_data);
-  uint8_t gpsinfo_data[30] = {
-    0xe6, 0x07, 0x18, 0xfb, 0x25, 0x12, 0x01, 0xfb,
-    0x11, 0xf9, 0x13, 0xf3, 0x0b, 0xfa, 0x09, 0x92,
-    0x16, 0xf7, 0x12, 0xf7, 0x03, 0xfa, 0x17, 0xfa,
-    0x1f, 0xf4, 0x0e, 0xf4, 0x0c, 0x91
-  };
-  protocol_field_write(&protocol_f_gpsinfo, gpsinfo_data);
-  uint8_t gpsraw_data[89] = {
-    0x25, 0xfc, 0x35, 0x01, 0xff, 0x3d, 0xfd, 0xd3,
-    0x02, 0x42, 0xbf, 0x00, 0xc6, 0x8f, 0x52, 0x0b,
-    0x81, 0xfe, 0xff, 0x80, 0xb5, 0xe9, 0x10, 0xd8,
-    0x82, 0xff, 0x37, 0xc1, 0x54, 0x0a, 0x2c, 0x31,
-    0x01, 0xac, 0xe5, 0x46, 0x1a, 0x51, 0x15, 0xff,
-    0xda, 0x73, 0x7e, 0x02, 0xd3, 0x6f, 0x00, 0x15,
-    0x66, 0x6e, 0x0c, 0x53, 0x39, 0x01, 0x21, 0x00,
-    0x00, 0x00, 0x77, 0x03, 0x00, 0x8a, 0x56, 0x41,
-    0x0f, 0x5e, 0x55, 0xff, 0x93, 0x7c, 0x1c, 0x12,
-    0x8b, 0xde, 0xff, 0x30, 0xbd, 0x00, 0x11, 0xb8,
-    0xfc, 0x00, 0xac, 0xa8, 0xbe, 0x1d, 0xb4, 0xe3,
-    0xff
-  };
-  protocol_field_write(&protocol_f_gpsraw, gpsraw_data);
-  uint8_t gpspos_data[21] = {
-    0x08, 0xea, 0xb4, 0x17, 0x96, 0xb0, 0xf1, 0x03,
-    0xf6, 0x5d, 0x6d, 0x1d, 0x4c, 0xfd, 0x8f, 0xf5,
-    0x37, 0x00, 0x0d, 0x01, 0x0c
-  };
-  protocol_field_write(&protocol_f_gpspos, gpspos_data);
-  uint8_t empty_data[17] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00
-  };
-  protocol_field_write(&protocol_f_empty, empty_data);
+  double F_Frac = (freq / 6.5) - (double) Reg_Int;
+  uint32_t Reg_Frag = (int) (F_Frac * 524288);
+  Reg_Frag += adj;
+
+  //printf("RegFrag: %x", Reg_Frag);
+
+  si446x_set_property(0x40, 0x04, 0x00, Reg_Int - 1, (Reg_Frag >> 16) & 0x0F, (Reg_Frag >> 8) & 0xFF, (Reg_Frag >> 0) & 0xFF);
+  //si446x_set_property(0x40, 0x04, 0x00, 0x3C, 0x0C, 0x4E, 0xFF);
+
+  return 0;
+}
+
+int set_power(uint8_t power){
+  si446x_set_property(0x22, 0x01, 0x01, power); //Set Output Power Level
 }

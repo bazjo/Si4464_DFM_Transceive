@@ -269,10 +269,10 @@ void protocol_frame_send(void){
   comm_frame_make_shadowcopy(&protocol_frame_txbuffer, &frame_txbuffer_shadow);
 
   #ifdef PROTOCOL_ECC_ENABLE
-    protocol_ecc_engine(&RS256, &frame_txbuffer_shadow);
+    //protocol_ecc_engine(&RS256, &frame_txbuffer_shadow);
   #endif
   #ifdef PROTOCOL_XOR_ENABLE
-    comm_xor_engine(&frame_txbuffer_shadow, &protocol_xor);
+    //comm_xor_engine(&frame_txbuffer_shadow, &protocol_xor);
   #endif
 
   sys_error = comm_frame_send(&frame_txbuffer_shadow);

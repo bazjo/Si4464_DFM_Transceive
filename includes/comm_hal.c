@@ -10,7 +10,7 @@
 #include "comm_hal.h"
 
 static uint8_t comm_hal_frequency = 0x00;
-static uint16_t comm_hal_datarate = 0x12c0;
+//static uint16_t comm_hal_datarate = 0x12c0;
 
 /**
  * This array get initialized with the prepared register settings from radio_config_Si446x.h which is
